@@ -101,10 +101,9 @@
   const uid  = (u.searchParams.get('uid')  || '').slice(0, 32);
   const addr = (u.searchParams.get('addr') || '').slice(0, 128);
   const frm  = (u.searchParams.get('frm')  || '').slice(0, 80);
-  // thid + msgid retained for future thread-deep-link experiments;
-  // not used by the current Gmail iOS scheme.
-  // const thid  = (u.searchParams.get('thid')  || '').trim().slice(0, 24);
-  // const msgid = (u.searchParams.get('msgid') || '').slice(0, 200);
+  // `thid` (hex Gmail threadId, from X-GM-EXT-1 IMAP extension) is read
+  // further below — used to construct the googlegmail:///cv=<thid>/<acct>
+  // deep-link scheme target (Scogland 2013).
 
   // Account index (for the Gmail web fallback only)
   const aMatch = /^account(\d+)$/i.exec(acc);
@@ -123,12 +122,35 @@
   document.getElementById('clip').textContent = clipPayload || '(no query)';
 
   const ENC_SUBJ = encodeURIComponent(subj);
+  const thid  = (u.searchParams.get('thid')  || '').trim().slice(0, 24);
+  // PRIMARY scheme target. Tom Scogland documented in May 2013
+  // (https://tom.scogland.com/blog/2013/05/17/gmail-url-scheme-extended/)
+  // that `googlegmail:///cv=<hex_threadId>/accountId=<N>&create-new-tab`
+  // opens the Gmail iOS app AT THAT EXACT EMAIL CONVERSATION VIEW (cv),
+  // using the same hex threadId format exposed in
+  // mail.google.com/mail/u/0/#inbox/<hex_threadId>. The hex threadId is the
+  // one we obtain from the X-GM-EXT-1 IMAP FETCH extension (see
+  // lib/gmail_kg_lib.fetch_gmail_thread_ids) — NO OAuth needed.
+  // This is the ONLY known Gmail iOS scheme path that targets a specific
+  // email (rather than /co for compose, or bare scheme for inbox). It has
+  // NOT been verified working on iOS hardware as of 2026 — Scogland's
+  // article is from 2013; Google may have restricted/removed it.
+  // Strategy: when we have a threadId, FIRE the /cv= path as PRIMARY.
+  // If iOS rejects it (Gmail app shows "Failed to understand link"), the
+  // user STILL has the clipboard payload from this same tap → paste into
+  // Gmail's search bar manually.
+  const CV_PATH = thid
+    ? `googlegmail:///cv=${thid}/accountId=${uIdx + 1}&create-new-tab`
+    : '';
   const BARE     = 'googlegmail://';
+  // Pick the scheme target: prefer /cv= deep-link when we have a threadId,
+  // else fall back to the bare scheme (opens Gmail app to inbox).
+  const PRIMARY_TARGET = CV_PATH || BARE;
   const WEB_SRCH = `https://mail.google.com/mail/u/${uIdx}/#search/${ENC_SUBJ}`;
 
   // Secondary fallback links
   document.getElementById('lnk_web').href  = WEB_SRCH;
-  document.getElementById('lnk_bare').href = BARE;
+  document.getElementById('lnk_bare').href = PRIMARY_TARGET;
 
   // Disable the primary surface entirely if there's nothing to copy and we only
   // want to fire the bare scheme — still one-tap-to-open, just simpler text.
@@ -170,8 +192,9 @@
       done.classList.add('show');
     }
     // 50ms micro-delay lets the clipboard write settle + the "✓" overlay paint
-    // before iOS rips focus to the Gmail app.
-    setTimeout(() => { window.location.href = BARE; }, 50);
+    // before iOS rips focus to the Gmail app. PRIMARY_TARGET is the /cv=
+    // deep-link when we have a threadId, else bare googlegmail://.
+    setTimeout(() => { window.location.href = PRIMARY_TARGET; }, 50);
   }
 
   // Primary surface: tap ANYWHERE -> fire.
