@@ -23,92 +23,106 @@
 <div class="card">
   <h1>📨 Open in Gmail</h1>
   <p class="subj" id="subj">…</p>
-  <p><code id="acc">account1</code> · UID <code id="uid">—</code></p>
-  <p id="status">Opening Gmail app…</p>
-  <a id="fallback" class="btn" style="display:none" href="googlegmail://">Open Gmail app</a>
-  <a id="web" class="btn" style="display:none;background:#5f6368;margin-left:8px"
-     href="#" rel="noopener">Open Gmail web</a>
+  <p><code id="acc">account1</code> · UID <code id="uid">—</code> · thread <code id="thid">—</code></p>
+  <p id="status">Opening Gmail…</p>
+  <a id="primary" class="btn" style="display:none" href="#">Open in Gmail app</a>
+  <a id="web"     class="btn" style="display:none;background:#5f6368;margin-left:8px"
+                   href="#" rel="noopener">Open in Gmail web</a>
 </div>
 <script>
 (() => {
-  // Read query params
+  // ----- Query params -----------------------------------------------------
   const u = new URL(window.location.href);
-  // Decoding once is enough — URLSearchParams already decodes.
   const subj = (u.searchParams.get('subj') || '').slice(0, 200);
   const acc  = (u.searchParams.get('acc')  || 'account1').slice(0, 32);
   const uid  = (u.searchParams.get('uid')  || '').slice(0, 32);
-  document.getElementById('subj').textContent = subj || 'this email';
-  document.getElementById('acc').textContent  = acc;
-  document.getElementById('uid').textContent  = uid || '—';
-  // Web-search fallback URL with subject pre-filled.
-  const enc = encodeURIComponent(subj);
-  document.getElementById('web').href =
-    'https://mail.google.com/u/' + (acc === 'account2' ? '1' : '0') +
-    '/#search/' + enc;
-  document.getElementById('fallback').href = 'googlegmail://';
+  const thid = (u.searchParams.get('thid') || '').trim().slice(0, 24);
+  const enc  = encodeURIComponent(subj);
 
-  // Detect platform. Telegram's inline-button tap on iOS loads this page in
-  // WKWebView and the user-gesture chain carries over: a JS-launched
-  // window.location to a custom scheme IS routed into the registered app.
+  document.getElementById('subj').textContent = subj || 'this email';
+  document.getElementById('acc' ).textContent = acc;
+  document.getElementById('uid' ).textContent = uid || '—';
+  document.getElementById('thid').textContent = thid || '—';
+
+  // ---- Build Gmail URLs --------------------------------------------------
+  // account1 -> u/0, account2 -> u/1, accountN -> u/(N-1)
+  const aMatch = /^account(\d+)$/i.exec(acc);
+  const uIdx   = aMatch ? (Math.max(1, parseInt(aMatch[1], 10)) - 1) : 0;
+
+  // PRIMARY URL — if we have the Gmail threadId (hex), deep-link to the exact
+  // email with `#inbox/<thid>`. Otherwise fall back to a subject search.
+  // Both URLs open mail.google.com; on iOS, the page will auto-show an
+  // "Open in Gmail app" prompt. The prompt launches `googlegmail://` and
+  // Discord/Telegram/Safari then hand the request to the Gmail app which
+  // opens the SAME URL hash → the app loads that exact thread.
+  //   Why this works: Gmail's iOS web makes a `googlegmail://` handshake
+  // immediately on page load when iOS is detected, and that handshake passes
+  // the current URL fragment to the app as the deep-link target.
+  let primaryUrl;
+  if (thid && /^[0-9a-fA-F]{8,}$/.test(thid)) {
+    primaryUrl = `https://mail.google.com/mail/u/${uIdx}/#inbox/${thid}`;
+  } else {
+    primaryUrl = `https://mail.google.com/mail/u/${uIdx}/#search/${enc}`;
+  }
+  const webFallbackUrl = primaryUrl;          // identical in either case
+  const gmailAppUrl    = 'googlegmail://';    // manual app-launch button
+
+  // Wire both visible buttons
+  const primaryBtn = document.getElementById('primary');
+  primaryBtn.href = gmailAppUrl;        // the "Open in Gmail app" fallback
+  document.getElementById('web').href = webFallbackUrl;
+
+  // ---- Decide launch target ---------------------------------------------
   const ua = navigator.userAgent;
-  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isIOS     = /iPhone|iPad|iPod/i.test(ua);
   const isAndroid = /Android/i.test(ua);
 
-  // Gmail iOS registers the custom scheme `googlegmail:` (per the publicly
-  // documented IntentKit Gmail.plist and EmailLink's Info.plist whitelist).
-  // Bare scheme launches the Gmail app. We can't deep-link to a specific
-  // message without OAuth, so the app opens to inbox; user taps the search
-  // icon and the visible subject narrows to the right thread.
-  let target = null;
-  if (isIOS) {
-    target = 'googlegmail://';
-  } else if (isAndroid) {
-    // Android intent — opens Gmail app package directly.
-    target = 'intent://com.google.android.gm/#Intent;scheme=googlegmail;' +
-             'package=com.google.android.gm;S.query=' + enc + ';end';
+  // The PRIMARY URL is the mail.google.com deep-link (with #inbox/<thid>).
+  // We navigate there via window.location — Telegram's WKWebView will load
+  // this HTTPS page in the in-app browser, which is fine because Gmail's web
+  // then auto-shows the iOS "Open in Gmail app" prompt that hands off into
+  // the app with this exact URL hash already loaded.
+  //
+  // We do NOT try `googlegmail://` directly because the scheme only knows
+  // `co` (compose); it has no thread-open capability. Routing through
+  // Gmail web is the only thing that deep-links to a specific email.
+  let target = primaryUrl;
+  if (isAndroid) {
+    // Android: an intent:// URL fine-targets the Gmail app package and can
+    // pass the URL fragment for deep-linking. If the Gmail app is installed
+    // it opens the same mail.google.com/#inbox/<thid> view inside the app.
+    const frag = thid
+      ? `#inbox;S.thread_id=${thid};end`
+      : `#search;S.query=${enc};end`;
+    target = `intent://mail.google.com/mail/u/${uIdx}/${frag}` +
+             `#Intent;scheme=https;package=com.google.android.gm;end`;
   }
 
-  const statusEl = document.getElementById('status');
-  const fallback = document.getElementById('fallback');
-  const web = document.getElementById('web');
+  const statusEl  = document.getElementById('status');
+  const webBtn    = document.getElementById('web');
 
-  if (target) {
-    // Hide the page first so the app switch is visually clean
-    // (Safari's "Open in app?" banner covers a brief flash of our HTML).
-    document.body.style.transition = 'opacity 0.18s ease';
-    document.body.style.opacity = '0.5';
+  // ---- Launch ------------------------------------------------------------
+  // We DO NOT use the iframe trick anymore — it interfered with the iOS
+  // WKWebView navigation chain when launching mail.google.com (the iframe
+  // tried to siphon the navigation, leaving the parent stuck on this page).
+  // A direct window.location = https://mail.google.com/... works reliably
+  // because Telegram's WKWebView correctly loads HTTPS URLs into its in-app
+  // browser, and the user-gesture context carries over.
+  document.body.style.transition = 'opacity 0.18s ease';
+  document.body.style.opacity = '0.5';
+  setTimeout(() => { window.location = target; }, 60);
 
-    // Two parallel mechanisms to nudge iOS into the app:
-    // 1) iframe src = custom scheme — bypasses iOS's JS location-navigate
-    //    suppression in some flows.
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = target;
-    document.body.appendChild(iframe);
-
-    // 2) window.location directly — this navigates the WKWebView to the
-    // custom scheme, which iOS hands to LSApplicationWorkspace. The user
-    // sees a brief iOS prompt or auto-switches to Gmail.
-    setTimeout(() => { window.location = target; }, 60);
-
-    // Reveal the manual fallback after a delay in case the auto-attempt
-    // didn't trigger (e.g. user tapped "Cancel" on iOS prompt, or app was
-    // uninstalled).
-    setTimeout(() => {
-      if (document.visibilityState === 'visible') {
-        statusEl.textContent = "If your Gmail app didn't open automatically, tap below:";
-        fallback.style.display = 'inline-block';
-        web.style.display = 'inline-block';
-        document.body.style.opacity = '1';
-      }
-    }, 1500);
-  } else {
-    // Desktop / unknown platform — show manual buttons; clicking the iOS
-    // custom-scheme button may still work if the user is on an iPad-page.
-    statusEl.textContent = 'Tap below to open Gmail:';
-    fallback.style.display = 'inline-block';
-    web.style.display = 'inline-block';
-  }
+  // Reveal manual buttons after a delay so the user has a clear recovery
+  // path if the auto-launch didn't fire (e.g. they tapped Cancel on the iOS
+  // prompt, or the app isn't installed, or they prefer to stay in Safari).
+  setTimeout(() => {
+    if (document.visibilityState === 'visible') {
+      statusEl.textContent = "If Gmail doesn't open automatically, tap below:";
+      primaryBtn.style.display = 'inline-block';
+      webBtn.style.display     = 'inline-block';
+      document.body.style.opacity = '1';
+    }
+  }, 1500);
 })();
 </script>
 </body>
