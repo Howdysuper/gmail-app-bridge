@@ -11,20 +11,19 @@
   .card { max-width:540px; margin:6vh auto 0; padding:24px; border-radius:14px;
           background:#f6f8fc; border:1px solid #dadce0; text-align:center; }
   h1 { font-size:18px; margin:0 0 10px; }
-  h2 { font-size:14px; margin:14px 0 6px; color:#5f6368; text-transform:uppercase;
-       letter-spacing:0.04em; font-weight:600; }
   p { margin:6px 0; color:#5f6368; font-size:13px; }
   code { background:#e8eaed; padding:2px 6px; border-radius:4px; font-size:12px;
          word-break:break-all; }
-  a.btn { display:block; margin:8px auto; padding:14px 22px; max-width:480px;
+  a.btn { display:block; margin:10px auto; padding:16px 22px; max-width:480px;
           background:#1a73e8; color:#fff; text-decoration:none; border-radius:999px;
           font-weight:600; font-size:15px; }
-  a.btn.gray { background:#5f6368; }
+  a.btn.gray  { background:#5f6368; }
   a.btn.outline { background:transparent; color:#1a73e8; border:2px solid #1a73e8; }
   .subj { font-weight:600; color:#202124; word-wrap:break-word; }
   .note { margin-top:18px; font-size:12px; color:#80868b; text-align:left;
           background:#fff; padding:12px; border-radius:8px; border:1px solid #e8eaed; }
-  .skipped { opacity:0.5; pointer-events:none; }
+  .copied { background:#0f9d58 !important; }
+  #status { margin-top:14px; font-size:12px; color:#1a73e8; font-weight:600; min-height:1em; }
 </style>
 </head>
 <body>
@@ -32,92 +31,106 @@
   <h1>📨 Open email in Gmail</h1>
   <p class="subj" id="subj">…</p>
   <p><code id="acc">account1</code> · UID <code id="uid">—</code></p>
-  <p>thread: <code id="thid">—</code></p>
-  <p id="msgid_line" style="display:none">Message-ID: <code id="msgid">—</code></p>
 
-  <h2>Tap a button to test</h2>
-  <!-- Three routes to test, user taps each once -->
-  <a id="btn_search" class="btn" href="#">A) googlegmail:///search (RFC822)</a>
-  <a id="btn_inbox"  class="btn gray" href="#">B) mail.google.com/#inbox/<thid></a>
-  <a id="btn_app"    class="btn outline" href="#">C) googlegmail:// (bare, opens app)</a>
-  <a id="btn_web"    class="btn gray" href="#">D) Open Gmail web (search by subject)</a>
+  <!-- Primary: copies subject to clipboard THEN fires the bare scheme -->
+  <a id="btn_open" class="btn" href="#">Open in Gmail app + copy subject</a>
+
+  <!-- Fallback: open the bare scheme alone, no clipboard -->
+  <a id="btn_bare" class="btn outline" href="#">Just open Gmail app (no copy)</a>
+
+  <!-- Fallback: search the Gmail iOS web (Safari) -->
+  <a id="btn_web"  class="btn gray" href="#">Open Gmail web (search in Safari)</a>
+
+  <p id="status"></p>
 
   <div class="note" id="note">
-    <strong>Test instructions:</strong><br>
-    1. Tap <strong>A</strong>: if Gmail app opens AND shows the exact email → ✅ (works!)<br>
-    2. Tap <strong>B</strong>: if Safari opens → confirmed (current behavior, we want better)<br>
-    3. Tap <strong>C</strong>: if Gmail app opens at inbox → bare scheme works, but no specific email<br>
-    4. Tap <strong>D</strong>: if Gmail web opens with the email pre-searched → web-only fallback<br>
-    <br>
-    Report back to Hermes: which button (A, B, C, or D) actually opened the Gmail app at the correct email?
+    <strong>One-tap flow:</strong><br>
+    1. Tap <strong>"Open in Gmail app + copy subject"</strong> above.<br>
+    2. The Gmail iOS app opens at your inbox (this is the only thing
+       <code>googlegmail://</code> can do).<br>
+    3. The subject of this email is now on your iOS clipboard.<br>
+    4. In the Gmail app, tap the search bar at top, then <strong>Paste</strong>
+       (the iOS paste banner will appear — tap Paste).<br>
+    5. The email you need surfaces at the top of the results.
   </div>
-
-  <p id="auto_status" style="margin-top:14px; font-size:11px; color:#80868b;"></p>
 </div>
 <script>
 (() => {
+  // ---------- Query params ----------
   const u = new URL(window.location.href);
   const subj = (u.searchParams.get('subj') || '').slice(0, 200);
   const acc  = (u.searchParams.get('acc')  || 'account1').slice(0, 32);
   const uid  = (u.searchParams.get('uid')  || '').slice(0, 32);
-  const thid = (u.searchParams.get('thid') || '').trim().slice(0, 24);
-  // NEW query param: msgid — the URL-encoded RFC822 Message-ID header
-  // (looks like <something@sending-domain>; URL-encoded form strips the angle brackets
-  // and escapes @ to %40 etc.). Used by route A): googlegmail:///search?q=rfc822msgid:<msgid>
-  const msgid_raw = (u.searchParams.get('msgid') || '').slice(0, 200);
-  const enc = encodeURIComponent(subj);
 
+  // If you ever want to thread-deep-link later, these are still available
+  // in the URL; they're just not used by the current Gmail iOS scheme.
+  //   const thid = (u.searchParams.get('thid') || '').trim().slice(0, 24);
+  //   const msgid = (u.searchParams.get('msgid') || '').slice(0, 200);
+
+  // ---------- Render header ----------
   document.getElementById('subj').textContent = subj || 'this email';
   document.getElementById('acc' ).textContent = acc;
   document.getElementById('uid' ).textContent = uid || '—';
-  document.getElementById('thid').textContent = thid || '—';
 
-  // Build URLs
+  // ---------- Account index ----------
   const aMatch = /^account(\d+)$/i.exec(acc);
   const uIdx = aMatch ? (Math.max(1, parseInt(aMatch[1], 10)) - 1) : 0;
 
-  // A) Gemini's claim: googlegmail:///search?q=rfc822msgid:<msgid> → opens Gmail app + searches by RFC822 Message-ID.
-  let urlA;
-  if (msgid_raw) {
-    // The query value should be the RFC822 msg-id WITHOUT angle brackets, url-encoded.
-    // q=rfc822msgid:abc@domain  → encode just the msg-id itself
-    const cleanMsgId = msgid_raw.replace(/^</, '').replace(/>$/, ''); // strip <>
-    urlA = `googlegmail:///search?q=rfc822msgid:${encodeURIComponent(cleanMsgId)}`;
-    document.getElementById('msgid_line').style.display = 'block';
-    document.getElementById('msgid').textContent = cleanMsgId;
-  } else {
-    // No msgid available — disable button A with an explanation
-    urlA = null;
-    document.getElementById('btn_search').classList.add('skipped');
-    document.getElementById('btn_search').textContent = 'A) (skip — no Message-ID available for this email)';
-  }
+  // ---------- URLs ----------
+  const ENC_SUBJ = encodeURIComponent(subj);
+  const BARE     = 'googlegmail://';                                       // Route C (confirmed)
+  const WEB_SRCH = `https://mail.google.com/mail/u/${uIdx}/#search/${ENC_SUBJ}`;
 
-  // B) mail.google.com/#inbox/<thid> — current path, opens Safari per user report
-  let urlB;
-  if (thid && /^[0-9a-fA-F]{8,}$/.test(thid)) {
-    urlB = `https://mail.google.com/mail/u/${uIdx}/#inbox/${thid}`;
-  } else {
-    urlB = `https://mail.google.com/mail/u/${uIdx}/#search/${enc}`;
-  }
+  document.getElementById('btn_bare').href = BARE;
+  document.getElementById('btn_web' ).href = WEB_SRCH;
+  // btn_open uses a click handler (below) instead of a plain href so it can
+  // do navigator.clipboard.writeText() inside the user gesture.
 
-  // C) bare googlegmail:// — confirmed working (opens app at inbox)
-  const urlC = 'googlegmail://';
+  // ---------- Primary button: copy-then-open ----------
+  const btnOpen = document.getElementById('btn_open');
+  const status  = document.getElementById('status');
+  btnOpen.addEventListener('click', async (ev) => {
+    ev.preventDefault();  // we control the navigation — don't let Safari fire it mid-copy
+    status.textContent = 'Copying subject…';
 
-  // D) mail.google.com web with subject search (broader, no threadId needed)
-  const urlD = `https://mail.google.com/mail/u/${uIdx}/#search/${enc}`;
+    // Try the async Clipboard API (iOS 13.4+, requires user gesture — which this is)
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(subj);
+      copied = true;
+    } catch (e1) {
+      // Fallback: hidden <textarea> + execCommand('copy') (works on older iOS too)
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = subj;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        copied = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (e2) {
+        copied = false;
+      }
+    }
 
-  // Wire every button
-  if (urlA) document.getElementById('btn_search').href = urlA;
-  document.getElementById('btn_inbox').href = urlB;
-  document.getElementById('btn_app').href    = urlC;
-  document.getElementById('btn_web').href   = urlD;
+    if (copied) {
+      btnOpen.classList.add('copied');
+      status.textContent = '✓ Subject copied. Opening Gmail…';
+    } else {
+      status.textContent = '⚠ Could not copy automatically. Tap "Open Gmail web" instead.';
+    }
 
-  // No auto-launch: iOS blocks custom-scheme navigation from non-user-gesture
-  // contexts (setTimeout), so the auto-redirect would silently no-op and add
-  // a confusing "is it loading?" delay. User taps a button — a real user
-  // gesture — to fire each route. Keeps the A/B/C/D experiment clean.
-  const autoStatus = document.getElementById('auto_status');
-  autoStatus.textContent = 'No auto-launch. Tap a button above to test that route.';
+    // Fire the bare scheme in the same user-gesture tick. iOS requires the
+    // custom-scheme navigation to happen within the click handler's task.
+    // We use a 50ms micro-delay so the clipboard write has time to settle
+    // and the user sees the "✓ copied" confirmation before being bounced.
+    setTimeout(() => { window.location.href = BARE; }, 50);
+  });
 })();
 </script>
 </body>
