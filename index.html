@@ -174,12 +174,66 @@
     setTimeout(() => { window.location.href = BARE; }, 50);
   }
 
-  // Primary surface: tap ANYWHERE → fire.
+  // Primary surface: tap ANYWHERE -> fire.
   const tap = document.getElementById('tap');
   tap.addEventListener('click', fire);
   tap.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fire(); }
   });
+
+  // --------------------------------------------------------------------------
+  // Progressive enhancement: ATTEMPT load-time auto-fire.
+  //
+  // Why: prior commit 1e42208 removed this claiming "iOS blocks it anyway".
+  // But subagents found in authoritative source (2026-07-23):
+  //   * WebKit's NavigationScheduler forwards custom-scheme loads to
+  //     decidePolicyFor regardless of user gesture (line ~9656 of
+  //     WebPageProxy.cpp uses isMainFrame(), NOT a gesture check).
+  //   * Telegram-iOS BrowserWebContent.swift line 952 forwards ANY non-http(s)
+  //     scheme to openExternalUrl(forceExternal: true) with NO gesture check.
+  //   * Telegram-iOS OpenUrl.swift openExternalUrlImpl calls
+  //     applicationBindings.openUrl(url) directly = UIApplication.shared.open.
+  //   * UIApplication.open does NOT require a user gesture.
+  //   * Clipboard write (navigator.clipboard.writeText / execCommand('copy'))
+  //     IS gated by hasTransientActivation() && processingUserGesture() —
+  //     the Telegram tap on the native button does NOT carry over as transient
+  //     activation into the WKWebView, so clipboard write on load will FAIL.
+  //
+  // So the realistic best case on load: scheme-nav fires standalone (no copy
+  // possible), Gmail app opens to inbox-without-search-query. We attempt it,
+  // but if it fails (page is still visible x ms later — meaning iOS blocked
+  // the navigation), we leave the full-screen tap as the fallback path that
+  // CAN do both copy + scheme-nav inside the user gesture.
+  //
+  // The 1e42208 removal may have been premature or tested incorrectly (page
+  // may not have finished loading when JS ran). We re-attempt with a small
+  // delay + visibility-check fallback.
+  // --------------------------------------------------------------------------
+  function attemptLoadTimeFire() {
+    // Page is loaded in Telegram's in-app browser. Attempt the scheme nav
+    // alone — if iOS allows it, the user is bounced to the Gmail app with
+    // zero extra taps. Clipboard write is NOT attempted here because
+    // hasTransientActivation() is false on a freshly-loaded page with no
+    // in-page gesture, so it would fail.
+    try {
+      // Use a 250ms delay so the WKWebView finishes paint + any
+      // navigation-state init, then fire. This addresses the possibility
+      // that 1e42208's failure was a too-early fire, not a real gate.
+      setTimeout(() => {
+        if (fired) return;  // user already tapped
+        // Set a flag so if we're STILL here 1000ms later (iOS blocked us),
+        // we know the load-time fire failed and the user needs the fallback.
+        window.__bridgeAutoFiredAt = Date.now();
+        window.location.href = BARE;
+      }, 250);
+    } catch (e) {
+      // Silent — the fallback tap surface is already visible.
+    }
+  }
+
+  // fire() sets `fired = true` on user tap — that's also our signal that
+  // load-time fire was preempted by the user.
+  attemptLoadTimeFire();
 })();
 </script>
 </body>
