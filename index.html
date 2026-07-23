@@ -45,13 +45,16 @@
 
   <div class="note" id="note">
     <strong>One-tap flow:</strong><br>
-    1. Tap <strong>"Open in Gmail app + copy subject"</strong> above.<br>
-    2. The Gmail iOS app opens at your inbox (this is the only thing
-       <code>googlegmail://</code> can do).<br>
-    3. The subject of this email is now on your iOS clipboard.<br>
+    1. Tap <strong>"Open in Gmail app + copy search query"</strong> above.<br>
+    2. The Gmail iOS app opens at your inbox
+       (this is the only thing <code>googlegmail://</code> can do).<br>
+    3. <strong>A Gmail search query is now on your iOS clipboard.</strong><br>
+       It's <code>from:<sender> <your email subject></code>
+       — Gmail's most-specific narrowing operator + your exact subject text,
+       so it pins the exact email at the top of the search results.<br>
     4. In the Gmail app, tap the search bar at top, then <strong>Paste</strong>
        (the iOS paste banner will appear — tap Paste).<br>
-    5. The email you need surfaces at the top of the results.
+    5. The exact email surfaces at the top of the results.
   </div>
 </div>
 <script>
@@ -61,6 +64,19 @@
   const subj = (u.searchParams.get('subj') || '').slice(0, 200);
   const acc  = (u.searchParams.get('acc')  || 'account1').slice(0, 32);
   const uid  = (u.searchParams.get('uid')  || '').slice(0, 32);
+  // NEW query params for the search-optimal clipboard payload:
+  //   addr = sender email (e.g. "noreply@roblox.com")
+  //   frm  = sender display name (e.g. "Roblox")
+  // The Gmail search syntax: from:<addr> <subject>
+  //   - from: operator is Gmail's most-specific narrowing primitive (full
+  //     email match)
+  //   - Raw subject text afterwards is treated as fulltext AND; since Gmail
+  //     indexes the entire message including the subject line, the subject
+  //     still appears as a match, but the address narrows first to a tiny
+  //     subset which makes the search ~instant + uniquely identifies the
+  //     thread even for generic subject lines like "Order confirmation".
+  const addr = (u.searchParams.get('addr') || '').slice(0, 128);
+  const frm  = (u.searchParams.get('frm')  || '').slice(0, 80);
 
   // If you ever want to thread-deep-link later, these are still available
   // in the URL; they're just not used by the current Gmail iOS scheme.
@@ -76,6 +92,22 @@
   const aMatch = /^account(\d+)$/i.exec(acc);
   const uIdx = aMatch ? (Math.max(1, parseInt(aMatch[1], 10)) - 1) : 0;
 
+  // ---------- Clipboard payload (search-optimal) ----------
+  // Build the Gmail-search-most-likely-to-find-exactly-this-email string.
+  // If addr is present: `from:<addr> <subject>` (uses Gmail's narrowing operator)
+  // If addr missing:    just `<subject>` (fulltext fallback)
+  const subjClean = subj.trim();
+  let clipPayload;
+  if (addr && subjClean) {
+    clipPayload = `from:${addr} ${subjClean}`;
+  } else if (subjClean) {
+    clipPayload = subjClean;
+  } else if (addr) {
+    clipPayload = `from:${addr}`;
+  } else {
+    clipPayload = '';
+  }
+
   // ---------- URLs ----------
   const ENC_SUBJ = encodeURIComponent(subj);
   const BARE     = 'googlegmail://';                                       // Route C (confirmed)
@@ -89,20 +121,35 @@
   // ---------- Primary button: copy-then-open ----------
   const btnOpen = document.getElementById('btn_open');
   const status  = document.getElementById('status');
+
+  // Update the primary button label so the user knows what's copying.
+  if (clipPayload) {
+    btnOpen.textContent = 'Open in Gmail app + copy search query';
+  } else {
+    btnOpen.textContent = 'Open in Gmail app';
+    btnOpen.classList.add('outline');  // visual signal: copy step will no-op
+  }
+
   btnOpen.addEventListener('click', async (ev) => {
     ev.preventDefault();  // we control the navigation — don't let Safari fire it mid-copy
-    status.textContent = 'Copying subject…';
+    if (!clipPayload) {
+      // Nothing to copy — just open the app.
+      status.textContent = 'No search payload. Opening Gmail…';
+      setTimeout(() => { window.location.href = BARE; }, 50);
+      return;
+    }
+    status.textContent = 'Copying search query…';
 
     // Try the async Clipboard API (iOS 13.4+, requires user gesture — which this is)
     let copied = false;
     try {
-      await navigator.clipboard.writeText(subj);
+      await navigator.clipboard.writeText(clipPayload);
       copied = true;
     } catch (e1) {
       // Fallback: hidden <textarea> + execCommand('copy') (works on older iOS too)
       try {
         const ta = document.createElement('textarea');
-        ta.value = subj;
+        ta.value = clipPayload;
         ta.setAttribute('readonly', '');
         ta.style.position = 'fixed';
         ta.style.top = '-1000px';
@@ -120,7 +167,7 @@
 
     if (copied) {
       btnOpen.classList.add('copied');
-      status.textContent = '✓ Subject copied. Opening Gmail…';
+      status.textContent = '✓ Search query copied. Opening Gmail…';
     } else {
       status.textContent = '⚠ Could not copy automatically. Tap "Open Gmail web" instead.';
     }
