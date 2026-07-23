@@ -112,25 +112,12 @@
   document.getElementById('btn_app').href    = urlC;
   document.getElementById('btn_web').href   = urlD;
 
-  // Auto-launch attempt: try A first (it's the only one that can open the Gmail APP
-  // at the specific email). If msgid missing, fall back to B (current behavior — opens
-  // Safari, which the user already verified works to the email thread).
+  // No auto-launch: iOS blocks custom-scheme navigation from non-user-gesture
+  // contexts (setTimeout), so the auto-redirect would silently no-op and add
+  // a confusing "is it loading?" delay. User taps a button — a real user
+  // gesture — to fire each route. Keeps the A/B/C/D experiment clean.
   const autoStatus = document.getElementById('auto_status');
-  if (urlA) {
-    autoStatus.textContent = 'Auto-launching A (googlegmail:///search)… if it doesn’t open the Gmail app in 2 sec, tap a button below.';
-    // Try the search scheme via JS redirect — Telegram's WKWebView SHOULD hand
-    // googlegmail:// to iOS, which routes to the Gmail app.
-    setTimeout(() => {
-      try {
-        window.location = urlA;
-      } catch (e) {
-        autoStatus.textContent = 'Auto-launch failed: ' + e;
-      }
-    }, 100);
-  } else {
-    autoStatus.textContent = 'Auto-launching B (Safari → Gmail web thread)… tap a button below if nothing opens.';
-    setTimeout(() => { window.location = urlB; }, 100);
-  }
+  autoStatus.textContent = 'No auto-launch. Tap a button above to test that route.';
 })();
 </script>
 </body>
