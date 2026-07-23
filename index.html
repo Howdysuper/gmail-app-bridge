@@ -4,125 +4,133 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <meta name="robots" content="noindex">
-<title>Opening Gmail…</title>
+<title>Open email in Gmail…</title>
 <style>
   body { font:16px/1.4 -apple-system,system-ui,Roboto,sans-serif; margin:0; padding:24px;
          background:#fff; color:#202124; }
-  .card { max-width:540px; margin:8vh auto 0; padding:24px; border-radius:14px;
+  .card { max-width:540px; margin:6vh auto 0; padding:24px; border-radius:14px;
           background:#f6f8fc; border:1px solid #dadce0; text-align:center; }
-  h1 { font-size:18px; margin:0 0 8px; }
-  p { margin:8px 0; color:#5f6368; font-size:14px; }
-  code { background:#e8eaed; padding:2px 6px; border-radius:4px; font-size:13px; }
-  a.btn { display:inline-block; margin-top:18px; padding:14px 22px; background:#1a73e8;
-          color:#fff; text-decoration:none; border-radius:999px; font-weight:600;
-          font-size:15px; min-width:220px; }
+  h1 { font-size:18px; margin:0 0 10px; }
+  h2 { font-size:14px; margin:14px 0 6px; color:#5f6368; text-transform:uppercase;
+       letter-spacing:0.04em; font-weight:600; }
+  p { margin:6px 0; color:#5f6368; font-size:13px; }
+  code { background:#e8eaed; padding:2px 6px; border-radius:4px; font-size:12px;
+         word-break:break-all; }
+  a.btn { display:block; margin:8px auto; padding:14px 22px; max-width:480px;
+          background:#1a73e8; color:#fff; text-decoration:none; border-radius:999px;
+          font-weight:600; font-size:15px; }
+  a.btn.gray { background:#5f6368; }
+  a.btn.outline { background:transparent; color:#1a73e8; border:2px solid #1a73e8; }
   .subj { font-weight:600; color:#202124; word-wrap:break-word; }
+  .note { margin-top:18px; font-size:12px; color:#80868b; text-align:left;
+          background:#fff; padding:12px; border-radius:8px; border:1px solid #e8eaed; }
+  .skipped { opacity:0.5; pointer-events:none; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>📨 Open in Gmail</h1>
+  <h1>📨 Open email in Gmail</h1>
   <p class="subj" id="subj">…</p>
-  <p><code id="acc">account1</code> · UID <code id="uid">—</code> · thread <code id="thid">—</code></p>
-  <p id="status">Opening Gmail…</p>
-  <a id="primary" class="btn" style="display:none" href="#">Open in Gmail app</a>
-  <a id="web"     class="btn" style="display:none;background:#5f6368;margin-left:8px"
-                   href="#" rel="noopener">Open in Gmail web</a>
+  <p><code id="acc">account1</code> · UID <code id="uid">—</code></p>
+  <p>thread: <code id="thid">—</code></p>
+  <p id="msgid_line" style="display:none">Message-ID: <code id="msgid">—</code></p>
+
+  <h2>Tap a button to test</h2>
+  <!-- Three routes to test, user taps each once -->
+  <a id="btn_search" class="btn" href="#">A) googlegmail:///search (RFC822)</a>
+  <a id="btn_inbox"  class="btn gray" href="#">B) mail.google.com/#inbox/<thid></a>
+  <a id="btn_app"    class="btn outline" href="#">C) googlegmail:// (bare, opens app)</a>
+  <a id="btn_web"    class="btn gray" href="#">D) Open Gmail web (search by subject)</a>
+
+  <div class="note" id="note">
+    <strong>Test instructions:</strong><br>
+    1. Tap <strong>A</strong>: if Gmail app opens AND shows the exact email → ✅ (works!)<br>
+    2. Tap <strong>B</strong>: if Safari opens → confirmed (current behavior, we want better)<br>
+    3. Tap <strong>C</strong>: if Gmail app opens at inbox → bare scheme works, but no specific email<br>
+    4. Tap <strong>D</strong>: if Gmail web opens with the email pre-searched → web-only fallback<br>
+    <br>
+    Report back to Hermes: which button (A, B, C, or D) actually opened the Gmail app at the correct email?
+  </div>
+
+  <p id="auto_status" style="margin-top:14px; font-size:11px; color:#80868b;"></p>
 </div>
 <script>
 (() => {
-  // ----- Query params -----------------------------------------------------
   const u = new URL(window.location.href);
   const subj = (u.searchParams.get('subj') || '').slice(0, 200);
   const acc  = (u.searchParams.get('acc')  || 'account1').slice(0, 32);
   const uid  = (u.searchParams.get('uid')  || '').slice(0, 32);
   const thid = (u.searchParams.get('thid') || '').trim().slice(0, 24);
-  const enc  = encodeURIComponent(subj);
+  // NEW query param: msgid — the URL-encoded RFC822 Message-ID header
+  // (looks like <something@sending-domain>; URL-encoded form strips the angle brackets
+  // and escapes @ to %40 etc.). Used by route A): googlegmail:///search?q=rfc822msgid:<msgid>
+  const msgid_raw = (u.searchParams.get('msgid') || '').slice(0, 200);
+  const enc = encodeURIComponent(subj);
 
   document.getElementById('subj').textContent = subj || 'this email';
   document.getElementById('acc' ).textContent = acc;
   document.getElementById('uid' ).textContent = uid || '—';
   document.getElementById('thid').textContent = thid || '—';
 
-  // ---- Build Gmail URLs --------------------------------------------------
-  // account1 -> u/0, account2 -> u/1, accountN -> u/(N-1)
+  // Build URLs
   const aMatch = /^account(\d+)$/i.exec(acc);
-  const uIdx   = aMatch ? (Math.max(1, parseInt(aMatch[1], 10)) - 1) : 0;
+  const uIdx = aMatch ? (Math.max(1, parseInt(aMatch[1], 10)) - 1) : 0;
 
-  // PRIMARY URL — if we have the Gmail threadId (hex), deep-link to the exact
-  // email with `#inbox/<thid>`. Otherwise fall back to a subject search.
-  // Both URLs open mail.google.com; on iOS, the page will auto-show an
-  // "Open in Gmail app" prompt. The prompt launches `googlegmail://` and
-  // Discord/Telegram/Safari then hand the request to the Gmail app which
-  // opens the SAME URL hash → the app loads that exact thread.
-  //   Why this works: Gmail's iOS web makes a `googlegmail://` handshake
-  // immediately on page load when iOS is detected, and that handshake passes
-  // the current URL fragment to the app as the deep-link target.
-  let primaryUrl;
-  if (thid && /^[0-9a-fA-F]{8,}$/.test(thid)) {
-    primaryUrl = `https://mail.google.com/mail/u/${uIdx}/#inbox/${thid}`;
+  // A) Gemini's claim: googlegmail:///search?q=rfc822msgid:<msgid> → opens Gmail app + searches by RFC822 Message-ID.
+  let urlA;
+  if (msgid_raw) {
+    // The query value should be the RFC822 msg-id WITHOUT angle brackets, url-encoded.
+    // q=rfc822msgid:abc@domain  → encode just the msg-id itself
+    const cleanMsgId = msgid_raw.replace(/^</, '').replace(/>$/, ''); // strip <>
+    urlA = `googlegmail:///search?q=rfc822msgid:${encodeURIComponent(cleanMsgId)}`;
+    document.getElementById('msgid_line').style.display = 'block';
+    document.getElementById('msgid').textContent = cleanMsgId;
   } else {
-    primaryUrl = `https://mail.google.com/mail/u/${uIdx}/#search/${enc}`;
-  }
-  const webFallbackUrl = primaryUrl;          // identical in either case
-  const gmailAppUrl    = 'googlegmail://';    // manual app-launch button
-
-  // Wire both visible buttons
-  const primaryBtn = document.getElementById('primary');
-  primaryBtn.href = gmailAppUrl;        // the "Open in Gmail app" fallback
-  document.getElementById('web').href = webFallbackUrl;
-
-  // ---- Decide launch target ---------------------------------------------
-  const ua = navigator.userAgent;
-  const isIOS     = /iPhone|iPad|iPod/i.test(ua);
-  const isAndroid = /Android/i.test(ua);
-
-  // The PRIMARY URL is the mail.google.com deep-link (with #inbox/<thid>).
-  // We navigate there via window.location — Telegram's WKWebView will load
-  // this HTTPS page in the in-app browser, which is fine because Gmail's web
-  // then auto-shows the iOS "Open in Gmail app" prompt that hands off into
-  // the app with this exact URL hash already loaded.
-  //
-  // We do NOT try `googlegmail://` directly because the scheme only knows
-  // `co` (compose); it has no thread-open capability. Routing through
-  // Gmail web is the only thing that deep-links to a specific email.
-  let target = primaryUrl;
-  if (isAndroid) {
-    // Android: an intent:// URL fine-targets the Gmail app package and can
-    // pass the URL fragment for deep-linking. If the Gmail app is installed
-    // it opens the same mail.google.com/#inbox/<thid> view inside the app.
-    const frag = thid
-      ? `#inbox;S.thread_id=${thid};end`
-      : `#search;S.query=${enc};end`;
-    target = `intent://mail.google.com/mail/u/${uIdx}/${frag}` +
-             `#Intent;scheme=https;package=com.google.android.gm;end`;
+    // No msgid available — disable button A with an explanation
+    urlA = null;
+    document.getElementById('btn_search').classList.add('skipped');
+    document.getElementById('btn_search').textContent = 'A) (skip — no Message-ID available for this email)';
   }
 
-  const statusEl  = document.getElementById('status');
-  const webBtn    = document.getElementById('web');
+  // B) mail.google.com/#inbox/<thid> — current path, opens Safari per user report
+  let urlB;
+  if (thid && /^[0-9a-fA-F]{8,}$/.test(thid)) {
+    urlB = `https://mail.google.com/mail/u/${uIdx}/#inbox/${thid}`;
+  } else {
+    urlB = `https://mail.google.com/mail/u/${uIdx}/#search/${enc}`;
+  }
 
-  // ---- Launch ------------------------------------------------------------
-  // We DO NOT use the iframe trick anymore — it interfered with the iOS
-  // WKWebView navigation chain when launching mail.google.com (the iframe
-  // tried to siphon the navigation, leaving the parent stuck on this page).
-  // A direct window.location = https://mail.google.com/... works reliably
-  // because Telegram's WKWebView correctly loads HTTPS URLs into its in-app
-  // browser, and the user-gesture context carries over.
-  document.body.style.transition = 'opacity 0.18s ease';
-  document.body.style.opacity = '0.5';
-  setTimeout(() => { window.location = target; }, 60);
+  // C) bare googlegmail:// — confirmed working (opens app at inbox)
+  const urlC = 'googlegmail://';
 
-  // Reveal manual buttons after a delay so the user has a clear recovery
-  // path if the auto-launch didn't fire (e.g. they tapped Cancel on the iOS
-  // prompt, or the app isn't installed, or they prefer to stay in Safari).
-  setTimeout(() => {
-    if (document.visibilityState === 'visible') {
-      statusEl.textContent = "If Gmail doesn't open automatically, tap below:";
-      primaryBtn.style.display = 'inline-block';
-      webBtn.style.display     = 'inline-block';
-      document.body.style.opacity = '1';
-    }
-  }, 1500);
+  // D) mail.google.com web with subject search (broader, no threadId needed)
+  const urlD = `https://mail.google.com/mail/u/${uIdx}/#search/${enc}`;
+
+  // Wire every button
+  if (urlA) document.getElementById('btn_search').href = urlA;
+  document.getElementById('btn_inbox').href = urlB;
+  document.getElementById('btn_app').href    = urlC;
+  document.getElementById('btn_web').href   = urlD;
+
+  // Auto-launch attempt: try A first (it's the only one that can open the Gmail APP
+  // at the specific email). If msgid missing, fall back to B (current behavior — opens
+  // Safari, which the user already verified works to the email thread).
+  const autoStatus = document.getElementById('auto_status');
+  if (urlA) {
+    autoStatus.textContent = 'Auto-launching A (googlegmail:///search)… if it doesn’t open the Gmail app in 2 sec, tap a button below.';
+    // Try the search scheme via JS redirect — Telegram's WKWebView SHOULD hand
+    // googlegmail:// to iOS, which routes to the Gmail app.
+    setTimeout(() => {
+      try {
+        window.location = urlA;
+      } catch (e) {
+        autoStatus.textContent = 'Auto-launch failed: ' + e;
+      }
+    }, 100);
+  } else {
+    autoStatus.textContent = 'Auto-launching B (Safari → Gmail web thread)… tap a button below if nothing opens.';
+    setTimeout(() => { window.location = urlB; }, 100);
+  }
 })();
 </script>
 </body>
