@@ -2,181 +2,183 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex">
-<title>Open email in Gmail…</title>
+<title>Opening Gmail…</title>
 <style>
-  body { font:16px/1.4 -apple-system,system-ui,Roboto,sans-serif; margin:0; padding:24px;
-         background:#fff; color:#202124; }
-  .card { max-width:540px; margin:6vh auto 0; padding:24px; border-radius:14px;
-          background:#f6f8fc; border:1px solid #dadce0; text-align:center; }
-  h1 { font-size:18px; margin:0 0 10px; }
-  p { margin:6px 0; color:#5f6368; font-size:13px; }
-  code { background:#e8eaed; padding:2px 6px; border-radius:4px; font-size:12px;
-         word-break:break-all; }
-  a.btn { display:block; margin:10px auto; padding:16px 22px; max-width:480px;
-          background:#1a73e8; color:#fff; text-decoration:none; border-radius:999px;
-          font-weight:600; font-size:15px; }
-  a.btn.gray  { background:#5f6368; }
-  a.btn.outline { background:transparent; color:#1a73e8; border:2px solid #1a73e8; }
-  .subj { font-weight:600; color:#202124; word-wrap:break-word; }
-  .note { margin-top:18px; font-size:12px; color:#80868b; text-align:left;
-          background:#fff; padding:12px; border-radius:8px; border:1px solid #e8eaed; }
-  .copied { background:#0f9d58 !important; }
-  #status { margin-top:14px; font-size:12px; color:#1a73e8; font-weight:600; min-height:1em; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: #1a73e8; color: #fff;
+    font: 17px/1.45 -apple-system, system-ui, Roboto, sans-serif;
+    overscroll-behavior: none;
+  }
+  /* The whole viewport is one giant tappable surface. iOS WKWebView needs
+     a genuine user gesture ON the page for navigator.clipboard.writeText()
+     and for custom-scheme (googlegmail://) navigation. Per prior commit
+     1e42208, load-time firing is blocked by iOS. So we make the ONE required
+     tap as effortless as possible: tap ANYWHERE on the screen. */
+  #tap {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center; padding: 24px;
+    cursor: pointer;
+    min-height: 100vh; min-height: 100dvh;
+  }
+  #tap:active { background: #1557b8; }
+  .icon { font-size: 56px; margin-bottom: 12px; line-height: 1; }
+  h1 { font-size: 20px; margin: 0 0 6px; font-weight: 700; }
+  .subj { font-weight: 500; margin: 0 0 16px; opacity: 0.95;
+          word-wrap: break-word; max-width: 90%; }
+  .cta {
+    background: rgba(255,255,255,0.16);
+    border: 2px solid rgba(255,255,255,0.85);
+    border-radius: 999px;
+    padding: 18px 28px; min-width: 80%;
+    font-size: 17px; font-weight: 700;
+    margin: 4px 0 14px;
+  }
+  .hint { font-size: 13px; opacity: 0.85; margin: 0; max-width: 90%; }
+  code  { background: rgba(0,0,0,0.25); padding: 1px 6px; border-radius: 4px;
+          font-size: 12px; word-break: break-all; }
+
+  /* Small secondary fallback at the very bottom — not the primary surface. */
+  .secondary {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    text-align: center;
+    background: rgba(0,0,0,0.18);
+  }
+  .secondary a {
+    display: inline-block; padding: 8px 12px;
+    color: #fff; text-decoration: none;
+    font-size: 13px; font-weight: 600;
+    opacity: 0.9;
+  }
+  .secondary a + a { margin-left: 12px; }
+
+  /* "Done" overlay if we somehow fire both ops and have a moment to show it. */
+  #done {
+    position: fixed; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    background: #0f9d58; color: #fff;
+    text-align: center; padding: 24px;
+  }
+  #done.show { display: flex; }
+  #done .icon { font-size: 64px; }
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>📨 Open email in Gmail</h1>
+<div id="tap" role="button" tabindex="0" aria-label="Tap to open Gmail — search query will be copied">
+  <div class="icon">📨</div>
+  <h1>Tap to open Gmail</h1>
   <p class="subj" id="subj">…</p>
-  <p><code id="acc">account1</code> · UID <code id="uid">—</code></p>
+  <div class="cta" id="cta">Copy search query + open Gmail</div>
+  <p class="hint">One tap. The Gmail app will open with<br>
+     <code id="clip"></code> on your clipboard.<br>
+     Tap Gmail's search bar → Paste → the email surfaces.</p>
+</div>
 
-  <!-- Primary: copies subject to clipboard THEN fires the bare scheme -->
-  <a id="btn_open" class="btn" href="#">Open in Gmail app + copy subject</a>
+<div class="secondary">
+  <a id="lnk_web">Open Gmail web</a>
+  <a id="lnk_bare">Just open Gmail (no copy)</a>
+</div>
 
-  <!-- Fallback: open the bare scheme alone, no clipboard -->
-  <a id="btn_bare" class="btn outline" href="#">Just open Gmail app (no copy)</a>
-
-  <!-- Fallback: search the Gmail iOS web (Safari) -->
-  <a id="btn_web"  class="btn gray" href="#">Open Gmail web (search in Safari)</a>
-
-  <p id="status"></p>
-
-  <div class="note" id="note">
-    <strong>One-tap flow:</strong><br>
-    1. Tap <strong>"Open in Gmail app + copy search query"</strong> above.<br>
-    2. The Gmail iOS app opens at your inbox
-       (this is the only thing <code>googlegmail://</code> can do).<br>
-    3. <strong>A Gmail search query is now on your iOS clipboard.</strong><br>
-       It's <code>from:<sender> <your email subject></code>
-       — Gmail's most-specific narrowing operator + your exact subject text,
-       so it pins the exact email at the top of the search results.<br>
-    4. In the Gmail app, tap the search bar at top, then <strong>Paste</strong>
-       (the iOS paste banner will appear — tap Paste).<br>
-    5. The exact email surfaces at the top of the results.
+<div id="done">
+  <div>
+    <div class="icon">✓</div>
+    <p style="margin:12px 0 0;font-weight:700">Search query copied. Opening Gmail…</p>
   </div>
 </div>
+
 <script>
 (() => {
-  // ---------- Query params ----------
   const u = new URL(window.location.href);
   const subj = (u.searchParams.get('subj') || '').slice(0, 200);
   const acc  = (u.searchParams.get('acc')  || 'account1').slice(0, 32);
   const uid  = (u.searchParams.get('uid')  || '').slice(0, 32);
-  // NEW query params for the search-optimal clipboard payload:
-  //   addr = sender email (e.g. "noreply@roblox.com")
-  //   frm  = sender display name (e.g. "Roblox")
-  // The Gmail search syntax: from:<addr> <subject>
-  //   - from: operator is Gmail's most-specific narrowing primitive (full
-  //     email match)
-  //   - Raw subject text afterwards is treated as fulltext AND; since Gmail
-  //     indexes the entire message including the subject line, the subject
-  //     still appears as a match, but the address narrows first to a tiny
-  //     subset which makes the search ~instant + uniquely identifies the
-  //     thread even for generic subject lines like "Order confirmation".
   const addr = (u.searchParams.get('addr') || '').slice(0, 128);
   const frm  = (u.searchParams.get('frm')  || '').slice(0, 80);
+  // thid + msgid retained for future thread-deep-link experiments;
+  // not used by the current Gmail iOS scheme.
+  // const thid  = (u.searchParams.get('thid')  || '').trim().slice(0, 24);
+  // const msgid = (u.searchParams.get('msgid') || '').slice(0, 200);
 
-  // If you ever want to thread-deep-link later, these are still available
-  // in the URL; they're just not used by the current Gmail iOS scheme.
-  //   const thid = (u.searchParams.get('thid') || '').trim().slice(0, 24);
-  //   const msgid = (u.searchParams.get('msgid') || '').slice(0, 200);
-
-  // ---------- Render header ----------
-  document.getElementById('subj').textContent = subj || 'this email';
-  document.getElementById('acc' ).textContent = acc;
-  document.getElementById('uid' ).textContent = uid || '—';
-
-  // ---------- Account index ----------
+  // Account index (for the Gmail web fallback only)
   const aMatch = /^account(\d+)$/i.exec(acc);
   const uIdx = aMatch ? (Math.max(1, parseInt(aMatch[1], 10)) - 1) : 0;
 
-  // ---------- Clipboard payload (search-optimal) ----------
-  // Build the Gmail-search-most-likely-to-find-exactly-this-email string.
-  // If addr is present: `from:<addr> <subject>` (uses Gmail's narrowing operator)
-  // If addr missing:    just `<subject>` (fulltext fallback)
+  // Clipboard payload: Gmail-search-optimal `from:<addr> <subject>`
   const subjClean = subj.trim();
   let clipPayload;
-  if (addr && subjClean) {
-    clipPayload = `from:${addr} ${subjClean}`;
-  } else if (subjClean) {
-    clipPayload = subjClean;
-  } else if (addr) {
-    clipPayload = `from:${addr}`;
-  } else {
-    clipPayload = '';
-  }
+  if (addr && subjClean)      clipPayload = `from:${addr} ${subjClean}`;
+  else if (subjClean)        clipPayload = subjClean;
+  else if (addr)             clipPayload = `from:${addr}`;
+  else                       clipPayload = '';
 
-  // ---------- URLs ----------
+  // Render
+  document.getElementById('subj').textContent = subj || 'this email';
+  document.getElementById('clip').textContent = clipPayload || '(no query)';
+
   const ENC_SUBJ = encodeURIComponent(subj);
-  const BARE     = 'googlegmail://';                                       // Route C (confirmed)
+  const BARE     = 'googlegmail://';
   const WEB_SRCH = `https://mail.google.com/mail/u/${uIdx}/#search/${ENC_SUBJ}`;
 
-  document.getElementById('btn_bare').href = BARE;
-  document.getElementById('btn_web' ).href = WEB_SRCH;
-  // btn_open uses a click handler (below) instead of a plain href so it can
-  // do navigator.clipboard.writeText() inside the user gesture.
+  // Secondary fallback links
+  document.getElementById('lnk_web').href  = WEB_SRCH;
+  document.getElementById('lnk_bare').href = BARE;
 
-  // ---------- Primary button: copy-then-open ----------
-  const btnOpen = document.getElementById('btn_open');
-  const status  = document.getElementById('status');
-
-  // Update the primary button label so the user knows what's copying.
-  if (clipPayload) {
-    btnOpen.textContent = 'Open in Gmail app + copy search query';
-  } else {
-    btnOpen.textContent = 'Open in Gmail app';
-    btnOpen.classList.add('outline');  // visual signal: copy step will no-op
+  // Disable the primary surface entirely if there's nothing to copy and we only
+  // want to fire the bare scheme — still one-tap-to-open, just simpler text.
+  if (!clipPayload) {
+    document.getElementById('cta').textContent = 'Open Gmail app';
+    document.getElementById('clip').textContent = '(no query — just opening the app)';
   }
 
-  btnOpen.addEventListener('click', async (ev) => {
-    ev.preventDefault();  // we control the navigation — don't let Safari fire it mid-copy
-    if (!clipPayload) {
-      // Nothing to copy — just open the app.
-      status.textContent = 'No search payload. Opening Gmail…';
-      setTimeout(() => { window.location.href = BARE; }, 50);
-      return;
-    }
-    status.textContent = 'Copying search query…';
+  let fired = false;  // guard against double-fire on rapid taps
 
-    // Try the async Clipboard API (iOS 13.4+, requires user gesture — which this is)
+  async function fire() {
+    if (fired) return;
+    fired = true;
+    // Copy → then open the Gmail app via the bare scheme. Both ops inside the
+    // user-gesture handler — iOS requires this; load-time firing is blocked.
     let copied = false;
-    try {
-      await navigator.clipboard.writeText(clipPayload);
-      copied = true;
-    } catch (e1) {
-      // Fallback: hidden <textarea> + execCommand('copy') (works on older iOS too)
+    if (clipPayload) {
       try {
-        const ta = document.createElement('textarea');
-        ta.value = clipPayload;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.top = '-1000px';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        ta.setSelectionRange(0, ta.value.length);
-        copied = document.execCommand('copy');
-        document.body.removeChild(ta);
-      } catch (e2) {
-        copied = false;
+        await navigator.clipboard.writeText(clipPayload);
+        copied = true;
+      } catch (e1) {
+        // Fallback for older iOS / WebView without async Clipboard API
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = clipPayload;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.top = '-1000px';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+          copied = document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch (e2) { copied = false; }
       }
     }
-
     if (copied) {
-      btnOpen.classList.add('copied');
-      status.textContent = '✓ Search query copied. Opening Gmail…';
-    } else {
-      status.textContent = '⚠ Could not copy automatically. Tap "Open Gmail web" instead.';
+      const done = document.getElementById('done');
+      done.classList.add('show');
     }
-
-    // Fire the bare scheme in the same user-gesture tick. iOS requires the
-    // custom-scheme navigation to happen within the click handler's task.
-    // We use a 50ms micro-delay so the clipboard write has time to settle
-    // and the user sees the "✓ copied" confirmation before being bounced.
+    // 50ms micro-delay lets the clipboard write settle + the "✓" overlay paint
+    // before iOS rips focus to the Gmail app.
     setTimeout(() => { window.location.href = BARE; }, 50);
+  }
+
+  // Primary surface: tap ANYWHERE → fire.
+  const tap = document.getElementById('tap');
+  tap.addEventListener('click', fire);
+  tap.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fire(); }
   });
 })();
 </script>
